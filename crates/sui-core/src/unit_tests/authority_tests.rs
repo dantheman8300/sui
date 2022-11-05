@@ -1912,11 +1912,11 @@ async fn test_store_revert_transfer_sui() {
         (gas_object_ref, TransactionDigest::genesis()),
     );
     assert!(db
-        .get_owner_objects(Owner::AddressOwner(recipient))
+        .get_owner_objects(recipient)
         .unwrap()
         .is_empty());
     assert_eq!(
-        db.get_owner_objects(Owner::AddressOwner(sender))
+        db.get_owner_objects(sender)
             .unwrap()
             .len(),
         1
