@@ -20,6 +20,7 @@ import HomePage, {
     ReceiptPage,
     CoinsSelectorPage,
     AppsPage,
+    NftTransferPage,
 } from '_pages/home';
 import InitializePage from '_pages/initialize';
 import BackupPage from '_pages/initialize/backup';
@@ -33,6 +34,7 @@ import { setNavVisibility } from '_redux/slices/app';
 const HIDDEN_MENU_PATHS = [
     '/stake',
     '/nft-details',
+    '/nft-transfer',
     '/receipt',
     '/send',
     '/send/select',
@@ -50,7 +52,9 @@ const App = () => {
     }, [isPopup]);
     const location = useLocation();
     useEffect(() => {
-        const menuVisible = !HIDDEN_MENU_PATHS.includes(location.pathname);
+        const menuVisible = !HIDDEN_MENU_PATHS.some((aPath) =>
+            location.pathname.startsWith(aPath)
+        );
         dispatch(setNavVisibility(menuVisible));
     }, [location, dispatch]);
     return (
@@ -60,6 +64,10 @@ const App = () => {
                 <Route path="nfts" element={<NftsPage />} />
                 <Route path="apps/*" element={<AppsPage />} />
                 <Route path="nft-details" element={<NFTDetailsPage />} />
+                <Route
+                    path="nft-transfer/:nftId"
+                    element={<NftTransferPage />}
+                />
                 <Route path="transactions" element={<TransactionsPage />} />
                 <Route path="send" element={<TransferCoinPage />} />
                 <Route path="send/select" element={<CoinsSelectorPage />} />
