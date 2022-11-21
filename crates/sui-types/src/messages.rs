@@ -1236,6 +1236,7 @@ pub enum ExecutionFailureStatus {
     InvalidTransferSui,
     InvalidTransferSuiInsufficientBalance,
     InvalidCoinObject,
+    InvalidCoinMetadataObject,
 
     //
     // Pay errors
@@ -1475,6 +1476,9 @@ impl Display for ExecutionFailureStatus {
             ),
             ExecutionFailureStatus::VMInvariantViolation => {
                 write!(f, "MOVE VM INVARIANT VIOLATION.")
+            }
+            ExecutionFailureStatus::InvalidCoinMetadataObject => {
+                write!(f, "Invalid CoinMetadata type")
             }
         }
     }
