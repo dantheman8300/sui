@@ -4,11 +4,9 @@
 
 use anyhow::anyhow;
 use curve25519_dalek::ristretto::RistrettoPoint;
-use digest::Digest;
-use fastcrypto::encoding::{Base64, Encoding, Hex};
-use hex::FromHex;
-use itertools::Itertools;
 use fastcrypto::encoding::decode_bytes_hex;
+use fastcrypto::encoding::{Base64, Encoding, Hex};
+use itertools::Itertools;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::ident_str;
 use move_core_types::identifier::IdentStr;
