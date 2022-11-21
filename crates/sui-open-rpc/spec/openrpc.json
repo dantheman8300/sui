@@ -2064,6 +2064,9 @@
           "Receive"
         ]
       },
+      "Base58": {
+        "type": "string"
+      },
       "Base64": {
         "description": "Base64 encoding.",
         "type": "string"
@@ -4380,7 +4383,7 @@
         "description": "A transaction will have a (unique) digest.",
         "allOf": [
           {
-            "$ref": "#/components/schemas/Base64"
+            "$ref": "#/components/schemas/Base58"
           }
         ]
       },
