@@ -219,6 +219,7 @@ impl<R: rand::RngCore + rand::CryptoRng> ConfigBuilder<R> {
                         network_address,
                         narwhal_primary_address: validator.narwhal_primary_address.clone(),
                         narwhal_worker_address: validator.narwhal_worker_address.clone(),
+                        narwhal_own_worker_address: validator.narwhal_own_worker_address.clone(),
                         narwhal_consensus_address: validator.narwhal_consensus_address.clone(),
                     },
                     pop,

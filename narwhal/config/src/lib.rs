@@ -407,6 +407,8 @@ pub struct WorkerInfo {
     pub transactions: Multiaddr,
     /// Address to receive messages from other workers (WAN) and our primary.
     pub worker_address: Multiaddr,
+    /// Optional alternative address at which workers can receive messages from their own primary.
+    pub own_worker_address: Option<Multiaddr>,
 }
 
 pub type SharedWorkerCache = Arc<ArcSwap<WorkerCache>>;
