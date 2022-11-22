@@ -34,6 +34,7 @@ use crate::object::{Object, Owner};
 use crate::sui_serde::Readable;
 use crate::waypoint::IntoPoint;
 use fastcrypto::hash::{HashFunction, Sha3_256};
+use move_core_types::language_storage::StructTag;
 
 #[cfg(test)]
 #[path = "unit_tests/base_types_tests.rs"]

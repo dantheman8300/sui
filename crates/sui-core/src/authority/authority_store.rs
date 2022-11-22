@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
 
 use arc_swap::ArcSwap;
-use either::Either;
 use fastcrypto::encoding::{Base64, Encoding};
 use itertools::Itertools;
 use move_core_types::language_storage::{StructTag, TypeTag};
@@ -1088,14 +1087,14 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                         _ => None,
                     },
                 ))
-                .partition_map(|(owner, id)| match owner {
-                    Owner::AddressOwner(address) => Either::Left((address, id)),
-                    Owner::ObjectOwner(object_id) => {
-                        Either::Right(Some((ObjectID::from(object_id), id)))
-                    }
-                    _ => Either::Right(None),
-                });
+                .map(|(owner, id)| match owner {
+                    Owner::AddressOwner(address) => (Some((address, id)), None),
+                    Owner::ObjectOwner(object_id) => (None, Some((ObjectID::from(object_id), id))),
+                    _ => (None, None),
+                })
+                .unzip();
 
+        let old_object_owners = old_object_owners.into_iter().flatten();
         let old_dynamic_fields = old_dynamic_fields.into_iter().flatten();
 
         // Delete the old owner index entries
@@ -1143,11 +1142,13 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
         // Update the indexes of the objects written
         let (owner_written, dynamic_field_written): (Vec<_>, Vec<_>) = written
             .iter()
-            .partition_map(|(id, (object_ref, new_object, _))| match new_object.owner {
-                Owner::AddressOwner(address) => {
-                    Either::Left(((address, *id), ObjectInfo::new(object_ref, new_object)))
-                }
-                Owner::ObjectOwner(object_id) => Either::Right(
+            .map(|(id, (object_ref, new_object, _))| match new_object.owner {
+                Owner::AddressOwner(address) => (
+                    Some(((address, *id), ObjectInfo::new(object_ref, new_object))),
+                    None,
+                ),
+                Owner::ObjectOwner(object_id) => (
+                    None,
                     self.try_create_dynamic_field_info(
                         object_ref,
                         new_object,
@@ -1155,9 +1156,11 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                     )
                     .map(|info| ((ObjectID::from(object_id), *id), info)),
                 ),
-                _ => Either::Right(None),
-            });
+                _ => (None, None),
+            })
+            .unzip();
 
+        let owner_written = owner_written.into_iter().flatten();
         let dynamic_field_written = dynamic_field_written.into_iter().flatten();
 
         write_batch =
@@ -1308,15 +1311,14 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
             .iter()
             .chain(effects.unwrapped.iter())
             .chain(effects.mutated.iter())
-            .map(|((id, _, _), owner)| (*owner, *id))
-            .partition_map(|(owner, id)| match owner {
-                Owner::AddressOwner(addr) => Either::Left((addr, id)),
-                Owner::ObjectOwner(object_id) => {
-                    Either::Right(Some((ObjectID::from(object_id), id)))
-                }
-                _ => Either::Right(None),
-            });
+            .map(|((id, _, _), owner)| match owner {
+                Owner::AddressOwner(addr) => (Some((*addr, *id)), None),
+                Owner::ObjectOwner(object_id) => (None, Some((ObjectID::from(*object_id), *id))),
+                _ => (None, None),
+            })
+            .unzip();
 
+        let owners_to_delete = owners_to_delete.into_iter().flatten();
         let dynamic_field_to_delete = dynamic_field_to_delete.into_iter().flatten();
 
         write_batch =
@@ -1339,39 +1341,37 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                         .expect("version revert should never fail"),
                 )
             });
-        let (old_objects, old_dynamic_fields, old_locks): (Vec<_>, Vec<_>, Vec<_>) = self
+        let (old_objects_and_locks, old_dynamic_fields): (Vec<_>, Vec<_>) = self
             .perpetual_tables
             .objects
             .multi_get(mutated_objects)?
             .into_iter()
-            .partition_map(|obj_opt| {
+            .map(|obj_opt| {
                 let obj = obj_opt.expect("Older object version not found");
-                let obj_ref = obj.compute_object_reference();
-                let lock = if obj.is_address_owned() {
-                    Some(obj_ref)
-                } else {
-                    None
-                };
-
                 match obj.owner {
-                    Owner::AddressOwner(addr) => (Some((
-                        (addr, obj.id()),
-                        ObjectInfo::new(&obj.compute_object_reference(), &obj),
-                    )), None, lock),
-                    Owner::ObjectOwner(object_id) => (None,
+                    Owner::AddressOwner(addr) => {
+                        let oref = obj.compute_object_reference();
+                        (
+                            Some((((addr, obj.id()), ObjectInfo::new(&oref, &obj)), oref)),
+                            None,
+                        )
+                    }
+                    Owner::ObjectOwner(object_id) => (
+                        None,
                         self.try_create_dynamic_field_info(
                             &obj.compute_object_reference(),
                             &obj,
                             Default::default(),
                         )
-                            .map(|info| ((ObjectID::from(object_id), obj.id()), info)),
-                                                      lock),
-                    _ => (None, None, lock),
+                        .map(|info| ((ObjectID::from(object_id), obj.id()), info)),
+                    ),
+                    _ => (None, None),
                 }
             })
             .unzip();
 
-        let old_locks: Vec<_> = old_locks.into_iter().flatten().collect();
+        let (old_objects, old_locks): (Vec<_>, Vec<_>) =
+            old_objects_and_locks.into_iter().flatten().unzip();
         let old_dynamic_fields = old_dynamic_fields.into_iter().flatten();
 
         write_batch = write_batch.insert_batch(&self.perpetual_tables.owner_index, old_objects)?;
