@@ -1,24 +1,25 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    authority_store_tables::{AuthorityEpochTables, AuthorityPerpetualTables},
-    *,
-};
-use crate::authority::authority_store_tables::ExecutionIndicesWithHash;
-use arc_swap::ArcSwap;
-use either::Either;
-use itertools::Itertools;
-use narwhal_executor::ExecutionIndices;
-use once_cell::sync::OnceCell;
-use rocksdb::Options;
-use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 use std::collections::BTreeMap;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fmt::Debug, path::PathBuf};
+
+use arc_swap::ArcSwap;
+use either::Either;
+use fastcrypto::encoding::{Base64, Encoding};
+use itertools::Itertools;
+use move_core_types::language_storage::{StructTag, TypeTag};
+use once_cell::sync::OnceCell;
+use rocksdb::Options;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tracing::{debug, info, trace};
+
+use narwhal_executor::ExecutionIndices;
 use sui_storage::{
     lock_service::ObjectLockStatus,
     mutex_table::{LockGuard, MutexTable},
@@ -31,10 +32,15 @@ use sui_types::object::Owner;
 use sui_types::storage::{ChildObjectResolver, SingleTxContext, WriteKind};
 use sui_types::{base_types::SequenceNumber, storage::ParentSync};
 use sui_types::{batch::TxSequenceNumber, object::PACKAGE_VERSION};
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
-use tracing::{debug, info, trace};
 use typed_store::rocks::DBBatch;
 use typed_store::traits::Map;
+
+use crate::authority::authority_store_tables::ExecutionIndicesWithHash;
+
+use super::{
+    authority_store_tables::{AuthorityEpochTables, AuthorityPerpetualTables},
+    *,
+};
 
 pub type AuthorityStore = SuiDataStore<AuthoritySignInfo>;
 pub type GatewayStore = SuiDataStore<EmptySignInfo>;
@@ -670,17 +676,9 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                     .owner_index
                     .insert(&(addr, object_ref.0), &ObjectInfo::new(&object_ref, object))?,
                 Owner::ObjectOwner(object_id) => {
-                    if let Some(info) = DynamicFieldInfo::new(&object_ref, object, &|id| {
-                        if let Ok(Some(o)) = self.get_object(id) {
-                            o.data
-                                .type_()
-                                .cloned()
-                                .map(|type_| (type_, o.version(), o.digest()))
-                        } else {
-                            warn!("Cannot get struct type for dynamic object {object_id}");
-                            None
-                        }
-                    }) {
+                    if let Some(info) =
+                        self.try_create_dynamic_field_info(&object_ref, object, Default::default())
+                    {
                         self.perpetual_tables
                             .dynamic_field_index
                             .insert(&(ObjectID::from(object_id), object_ref.0), &info)?
@@ -701,6 +699,71 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
             .insert(&object_ref, &object.previous_transaction)?;
 
         Ok(())
+    }
+
+    fn try_create_dynamic_field_info(
+        &self,
+        oref: &ObjectRef,
+        o: &Object,
+        other_objects: BTreeMap<ObjectID, &Object>,
+    ) -> Option<DynamicFieldInfo> {
+        let field = o.data.try_as_move()?;
+        if !is_dynamic_field(&field.type_) {
+            return None;
+        }
+        // Assuming dynamic field's bytearray structured as following [field object id][field name][1][object id]
+        // field object id and object id is the same for dynamic field, and different for dynamic object.
+        // index of the 1u8 byte
+        let (index, _) = field
+            .contents()
+            .iter()
+            .find_position(|byte| **byte == 1u8)?;
+        let name = &field.contents()[ObjectID::LENGTH..index];
+
+        let name = if name.len() == ObjectID::LENGTH {
+            ObjectID::try_from(name).ok()?.to_hex_literal()
+        } else if let Ok(name) = String::from_utf8(name.to_vec()) {
+            name
+        } else {
+            Base64::encode(name)
+        };
+
+        let object_id =
+            ObjectID::try_from(&field.contents()[index + 1..ObjectID::LENGTH + index + 1]).ok()?;
+
+        Some(if is_dynamic_object_field(&field.type_.type_params[0]) {
+            let (object_type, version, digest) = if let Some(o) = other_objects.get(&object_id) {
+                o.data
+                    .type_()
+                    .cloned()
+                    .map(|type_| (type_, o.version(), o.digest()))
+            } else if let Ok(Some(o)) = self.get_object(&object_id) {
+                o.data
+                    .type_()
+                    .cloned()
+                    .map(|type_| (type_, o.version(), o.digest()))
+            } else {
+                warn!("Cannot get struct type for dynamic object {object_id}");
+                None
+            }?;
+            DynamicFieldInfo {
+                name,
+                type_: DynamicFieldType::Object,
+                object_type: object_type.to_string(),
+                object_id,
+                version,
+                digest,
+            }
+        } else {
+            DynamicFieldInfo {
+                name,
+                type_: DynamicFieldType::Field(object_id),
+                object_type: field.type_.type_params[1].to_string(),
+                object_id: oref.0,
+                version: oref.1,
+                digest: oref.2,
+            }
+        })
     }
 
     /// This function is used by the bench.rs script, and should not be used in other contexts
@@ -734,24 +797,14 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                 &self.perpetual_tables.dynamic_field_index,
                 ref_and_objects.iter().filter_map(|(oref, o)| {
                     if let Owner::ObjectOwner(object_id) = o.owner {
-                        DynamicFieldInfo::new(oref, o, &|id| {
-                            if let Some((_, o)) =
-                                ref_and_objects.iter().find(|((oid, _, _), _)| oid == id)
-                            {
-                                o.data
-                                    .type_()
-                                    .cloned()
-                                    .map(|type_| (type_, o.version(), o.digest()))
-                            } else if let Ok(Some(o)) = self.get_object(id) {
-                                o.data
-                                    .type_()
-                                    .cloned()
-                                    .map(|type_| (type_, o.version(), o.digest()))
-                            } else {
-                                warn!("Cannot get struct type for dynamic object {object_id}");
-                                None
-                            }
-                        })
+                        self.try_create_dynamic_field_info(
+                            oref,
+                            o,
+                            ref_and_objects
+                                .iter()
+                                .map(|((id, ..), o)| (*id, **o))
+                                .collect(),
+                        )
                         .map(|info| ((ObjectID::from(object_id), oref.0), info))
                     } else {
                         None
@@ -1095,22 +1148,11 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                     Either::Left(((address, *id), ObjectInfo::new(object_ref, new_object)))
                 }
                 Owner::ObjectOwner(object_id) => Either::Right(
-                    DynamicFieldInfo::new(object_ref, new_object, &|id| {
-                        if let Some((_, o, _)) = written.get(id) {
-                            o.data
-                                .type_()
-                                .cloned()
-                                .map(|type_| (type_, o.version(), o.digest()))
-                        } else if let Ok(Some(o)) = self.get_object(id) {
-                            o.data
-                                .type_()
-                                .cloned()
-                                .map(|type_| (type_, o.version(), o.digest()))
-                        } else {
-                            warn!("Cannot get struct type for dynamic object {object_id}");
-                            None
-                        }
-                    })
+                    self.try_create_dynamic_field_info(
+                        object_ref,
+                        new_object,
+                        written.iter().map(|(id, (_, o, _))| (*id, o)).collect(),
+                    )
                     .map(|info| ((ObjectID::from(object_id), *id), info)),
                 ),
                 _ => Either::Right(None),
@@ -1317,17 +1359,11 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> SuiDataStore<S> {
                         ObjectInfo::new(&obj.compute_object_reference(), &obj),
                     )), None, lock),
                     Owner::ObjectOwner(object_id) => (None,
-                        DynamicFieldInfo::new(&obj.compute_object_reference(), &obj, &|id| {
-                            if let Ok(Some(o)) = self.get_object(id) {
-                                o.data
-                                    .type_()
-                                    .cloned()
-                                    .map(|type_| (type_, o.version(), o.digest()))
-                            } else {
-                                warn!("Cannot get struct type for dynamic object {object_id}");
-                                None
-                            }
-                        })
+                        self.try_create_dynamic_field_info(
+                            &obj.compute_object_reference(),
+                            &obj,
+                            Default::default(),
+                        )
                             .map(|info| ((ObjectID::from(object_id), obj.id()), info)),
                                                       lock),
                     _ => (None, None, lock),
@@ -1873,6 +1909,18 @@ impl<S: Eq + Debug + Serialize + for<'de> Deserialize<'de>> ModuleResolver for S
                     .cloned()
             }))
     }
+}
+
+fn is_dynamic_field(tag: &StructTag) -> bool {
+    tag.address == SUI_FRAMEWORK_ADDRESS
+        && tag.module.as_str() == "dynamic_field"
+        && tag.name.as_str() == "Field"
+}
+
+fn is_dynamic_object_field(tag: &TypeTag) -> bool {
+    matches!(tag, TypeTag::Struct(tag) if tag.address == SUI_FRAMEWORK_ADDRESS
+        && tag.module.as_str() == "dynamic_object_field"
+        && tag.name.as_str() == "Wrapper")
 }
 
 /// A wrapper to make Orphan Rule happy
