@@ -383,6 +383,32 @@
       }
     },
     {
+      "name": "sui_getDynamicFields",
+      "tags": [
+        {
+          "name": "Read API"
+        }
+      ],
+      "description": "Return the list of objects owned by an object.",
+      "params": [
+        {
+          "name": "object_id",
+          "description": "the ID of the owner object",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ObjectID"
+          }
+        }
+      ],
+      "result": {
+        "name": "DynamicFieldPage",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Page_for_DynamicFieldInfo_and_String"
+        }
+      }
+    },
+    {
       "name": "sui_getEvents",
       "tags": [
         {
@@ -816,91 +842,6 @@
                   "AddressOwner": "0xd885442b44972526c4e8ce25a0416c3955d818bb"
                 },
                 "previousTransaction": "136J57/v1Pc62j0ZrIfUU1HwGWqIC5XD6iRN0GDStlM="
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "sui_getObjectsOwnedByObject",
-      "tags": [
-        {
-          "name": "Read API"
-        }
-      ],
-      "description": "Return the list of objects owned by an object.",
-      "params": [
-        {
-          "name": "object_id",
-          "description": "the ID of the owner object",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/ObjectID"
-          }
-        }
-      ],
-      "result": {
-        "name": "Vec<SuiObjectInfo>",
-        "required": true,
-        "schema": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/ObjectInfo"
-          }
-        }
-      },
-      "examples": [
-        {
-          "name": "Get objects owned by an object",
-          "params": [
-            {
-              "name": "object_id",
-              "value": "0x8196d048b7a6d04c8edc89579d86fd3fc90c52f9"
-            }
-          ],
-          "result": {
-            "name": "Result",
-            "value": [
-              {
-                "objectId": "0xa14c6b812b94fe613c5bcebb5eeb1d449e251616",
-                "version": 0,
-                "digest": "bVfXH96xVNDcns23swBX0KkyaEysNSzcGj6JgCnQJO4=",
-                "type": "0x2::coin::Coin<0x2::sui::SUI>",
-                "owner": {
-                  "ObjectOwner": "0x8196d048b7a6d04c8edc89579d86fd3fc90c52f9"
-                },
-                "previousTransaction": "wdRMavXi+s3thNA7U3NRTxbj1m4ACBBRZLtzoe1YssE="
-              },
-              {
-                "objectId": "0x8b0cbf377792e206e6b80d4d5eea64e2e70563b1",
-                "version": 0,
-                "digest": "WJAmxON/lBpFHvggmg+/vxtUmyuya46u4IiVFG3ye8M=",
-                "type": "0x2::coin::Coin<0x2::sui::SUI>",
-                "owner": {
-                  "ObjectOwner": "0x8196d048b7a6d04c8edc89579d86fd3fc90c52f9"
-                },
-                "previousTransaction": "zyYQwUsuJ8Hu1WwztXkDQVDqRrzPdlPgC28ktjvQTaY="
-              },
-              {
-                "objectId": "0x8bc160c74cd844f922623fa58cdd6ef2d0531ce3",
-                "version": 0,
-                "digest": "WfMui9DNX54cTteFYCsUTXmIN9uwFHTINWbFsqU1QQ0=",
-                "type": "0x2::coin::Coin<0x2::sui::SUI>",
-                "owner": {
-                  "ObjectOwner": "0x8196d048b7a6d04c8edc89579d86fd3fc90c52f9"
-                },
-                "previousTransaction": "2qHdP8SvMhjXbMeqa+GABOXjjLNcyvGLfxpOPcex5/8="
-              },
-              {
-                "objectId": "0xd3dbd682f600d1f62dc0921f7f7dbfca95055adc",
-                "version": 0,
-                "digest": "XhR6Hu4u3SNxRHRERonJRvaaWFkkuRxLiubUzW4eAvY=",
-                "type": "0x2::coin::Coin<0x2::sui::SUI>",
-                "owner": {
-                  "ObjectOwner": "0x8196d048b7a6d04c8edc89579d86fd3fc90c52f9"
-                },
-                "previousTransaction": "ZY0hvOm4i9zu4SlBRO7EfPOTiLtoD2m3QmvFKSlpL9w="
               }
             ]
           }
@@ -2219,6 +2160,59 @@
                 }
               }
             }
+          }
+        ]
+      },
+      "DynamicFieldInfo": {
+        "type": "object",
+        "required": [
+          "digest",
+          "name",
+          "objectId",
+          "objectType",
+          "type",
+          "version"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/ObjectDigest"
+          },
+          "name": {
+            "type": "string"
+          },
+          "objectId": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "objectType": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/DynamicFieldType"
+          },
+          "version": {
+            "$ref": "#/components/schemas/SequenceNumber"
+          }
+        }
+      },
+      "DynamicFieldType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Object"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Field"
+            ],
+            "properties": {
+              "Field": {
+                "$ref": "#/components/schemas/ObjectID"
+              }
+            },
+            "additionalProperties": false
           }
         ]
       },
@@ -3558,6 +3552,26 @@
             ]
           }
         ]
+      },
+      "Page_for_DynamicFieldInfo_and_String": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DynamicFieldInfo"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "Page_for_EventEnvelope_and_EventID": {
         "type": "object",
